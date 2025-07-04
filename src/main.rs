@@ -1,7 +1,3 @@
-use anyhow::Result;
+fn main() {
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    
-    Ok(())
 }
