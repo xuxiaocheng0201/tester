@@ -21,40 +21,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install packages
-        run: |
-          sudo apt-get update -y && sudo apt-get upgrade -y
-          sudo apt-get install -y build-essential musl-tools
-          rustup target add x86_64-unknown-linux-musl
+#      - name: Install packages
+#        run: |
+#          sudo apt-get update -y && sudo apt-get upgrade -y
+#          sudo apt-get install -y build-essential musl-tools
+#          rustup target add x86_64-unknown-linux-musl
 
-      - name: Install packages
+      - name: Find gcc
         continue-on-error: true
-        run: |
-          sudo apt-get install g++-x86-64-linux-musl
+        run: sudo find / -name x86_64-linux-musl-gcc
 
-      - name: Cache rust
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ./target
-          key: temp
-
-      - name: Check toolchain
+      - name: Find g++
         continue-on-error: true
-        run: |
-          which x86_64-linux-musl-gcc
-          x86_64-linux-musl-gcc --version
+        run: sudo find / -name x86_64-linux-musl-g++
 
-      - name: Check toolchain
+      - name: Find clang
         continue-on-error: true
-        run: |
-          which x86_64-linux-musl-g++
-          x86_64-linux-musl-g++ --version
+        run: sudo find / -name x86_64-linux-musl-clang
 
-      - name: Build
-        run: |
-          cargo build --target x86_64-unknown-linux-musl
+      - name: Find clang++
+        continue-on-error: true
+        run: sudo find / -name x86_64-linux-musl-clang++
+
+#      - name: Cache rust
+#        uses: actions/cache@v4
+#        with:
+#          path: |
+#            ~/.cargo/bin/
+#            ~/.cargo/registry/index/
+#            ~/.cargo/registry/cache/
+#            ~/.cargo/git/db/
+#            ./target
+#          key: temp
+#
+#      - name: Build
+#        run: |
+#          cargo build --target x86_64-unknown-linux-musl
