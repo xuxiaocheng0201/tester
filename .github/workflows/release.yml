@@ -21,39 +21,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-#      - name: Install packages
-#        run: |
-#          sudo apt-get update -y && sudo apt-get upgrade -y
-#          sudo apt-get install -y build-essential musl-tools
-#          rustup target add x86_64-unknown-linux-musl
+      - name: Install packages
+        run: |
+          sudo apt-get update -y && sudo apt-get upgrade -y
+          sudo apt-get install -y build-essential musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Find gcc
-        continue-on-error: true
-        run: sudo find / -name x86_64-linux-musl-gcc
+      - name: Cache rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ./target
+          key: temp
 
-      - name: Find g++
-        continue-on-error: true
-        run: sudo find / -name x86_64-linux-musl-g++
+      - name: Build
+        run: |
+          cross build --target x86_64-unknown-linux-musl
 
-      - name: Find clang
-        continue-on-error: true
-        run: sudo find / -name x86_64-linux-musl-clang
-
-      - name: Find clang++
-        continue-on-error: true
-        run: sudo find / -name x86_64-linux-musl-clang++
-
-#      - name: Cache rust
-#        uses: actions/cache@v4
-#        with:
-#          path: |
-#            ~/.cargo/bin/
-#            ~/.cargo/registry/index/
-#            ~/.cargo/registry/cache/
-#            ~/.cargo/git/db/
-#            ./target
-#          key: temp
-#
-#      - name: Build
-#        run: |
-#          cargo build --target x86_64-unknown-linux-musl
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          path: ./target/x86_64-unknown-linux-musl/debug/tester
