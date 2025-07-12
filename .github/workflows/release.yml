@@ -1,0 +1,463 @@
+name: Build Release
+
+permissions:
+  contents: read
+
+on:
+  push:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+  FRB_VERSION: "2.11.1"
+
+jobs:
+  build-windows-x86_64:
+    name: Build windows-x86_64
+    runs-on: windows-latest
+    steps:
+      - name: Check rust version
+        run: rustup --version
+
+      - name: Setup flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Check flutter version
+        run: flutter --version
+
+      - name: Checkout ui
+        uses: actions/checkout@v4
+        with:
+          repository: wlist-org/wlist_ui
+          token: '${{ secrets.GH_TOKEN }}'
+          path: ./wlist_ui
+          submodules: recursive
+
+      - name: Checkout native
+        uses: actions/checkout@v4
+        with:
+          repository: wlist-org/wlist_native
+          token: '${{ secrets.GH_TOKEN }}'
+          path: ./wlist_native
+          submodules: recursive
+
+      - name: Move to root
+        run: |
+          mv ./wlist_ui D:/wlist_ui
+          mv ./wlist_native D:/wlist_native
+
+      - name: Write crt and key
+        shell: bash
+        working-directory: D:/
+        run: |
+          echo ${{ secrets.SENTRY_DSN }} | base64 --decode > ./wlist_native/wlist_common/src/dsn.txt
+          echo ${{ secrets.SENTRY_DSN_FLUTTER }} | base64 --decode > ./wlist_ui/lib/dsn.dart
+          echo ${{ secrets.SENTRY_PROPERTIES }} | base64 --decode > ./wlist_ui/sentry.properties
+          mkdir ./wlist_native/wlist_web/certs
+          echo ${{ secrets.WEB_CLIENT_CRT }} | base64 --decode > ./wlist_native/wlist_web/certs/client.crt
+          echo ${{ secrets.WEB_CLIENT_KEY }} | base64 --decode > ./wlist_native/wlist_web/certs/client.key
+
+      - name: Cache rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            D:/wlist_ui/rust/target
+            D:/wlist_ui/build/windows/x64/plugins/rust_lib_wlist_ui/cargokit_build
+          key: wlist-release-rust-windows-x86_64-v0-${{ github.run_id }}
+          restore-keys: |
+            wlist-release-rust-windows-x86_64-v0-
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if ! command -v flutter_rust_bridge_codegen &> /dev/null; then
+            echo Newly install flutter_rust_bridge_codegen@${FRB_VERSION} and cargo-expand.
+            cargo install flutter_rust_bridge_codegen@${FRB_VERSION} --locked
+            cargo install cargo-expand --locked --force
+          else
+            INSTALLED_VERSION=$(flutter_rust_bridge_codegen --version | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+            if [ "$INSTALLED_VERSION" != "$FRB_VERSION" ]; then
+              echo Update install flutter_rust_bridge_codegen@${FRB_VERSION} and cargo-expand.
+              cargo install flutter_rust_bridge_codegen@${FRB_VERSION} --locked --force
+              cargo install cargo-expand --locked --force
+            fi
+          fi
+          flutter pub global activate intl_utils
+          flutter pub global activate fastforge
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Set Perl environment variables
+        run: |
+          echo "PERL=$((where.exe perl)[0])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "OPENSSL_SRC_PERL=$((where.exe perl)[0])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Generate code
+        working-directory: D:/wlist_ui
+        run: |
+          flutter_rust_bridge_codegen integrate --no-enable-integration-test
+          git reset --hard
+          flutter pub get
+          flutter_rust_bridge_codegen generate
+          flutter pub global run intl_utils:generate
+          flutter create --platforms=windows .
+          dart run flutter_launcher_icons
+
+      - name: Relink native
+        working-directory: D:/wlist_ui
+        run: |
+          powershell -Command "Set-Content ./diffs/relink.patch -Value ((gc ./diffs/relink.patch -Raw) -replace '\r','') -NoNewline"
+          git apply ./diffs/relink.patch
+
+      #      - name: Apply patches
+      #        working-directory: D:/wlist_ui
+      #        run: |
+      #          git apply ./diffs/*.patch
+      #          git apply ./diffs/windows/*
+
+      - name: Build release
+        working-directory: D:/wlist_ui
+        run: |
+          rustup run stable cargo build --manifest-path ./rust/Cargo.toml -p rust_lib_wlist_ui --release --target x86_64-pc-windows-msvc --target-dir ./build/windows/x64/plugins/rust_lib_wlist_ui/cargokit_build
+          flutter build windows --release --split-debug-info=./symbols
+
+      - name: Upload symbols
+        continue-on-error: true
+        working-directory: D:/wlist_ui
+        run: dart run sentry_dart_plugin --ignore-missing --sentry-define=symbols_path=./symbols
+
+      - name: Package exe
+        id: package-exe
+        continue-on-error: true
+        working-directory: D:/wlist_ui
+        run: |
+          Invoke-WebRequest https://raw.githubusercontent.com/jrsoftware/issrc/refs/heads/main/Files/Languages/Unofficial/ChineseSimplified.isl -OutFile "C:\Program Files (x86)\Inno Setup 6\Languages\ChineseSimplified.isl"
+          fastforge package --skip-clean --platform windows --targets exe --flutter-build-args=split-debug-info=./symbols
+      - name: Upload exe
+        if: steps.package-exe.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wlist_ui-windows-x86_64-exe
+          path: D:/wlist_ui/dist/*/wlist_ui-*-windows-setup.exe
+
+      - name: Package msix
+        id: package-msix
+        continue-on-error: true
+        working-directory: D:/wlist_ui
+        run: |
+          fastforge package --skip-clean --platform windows --targets msix --flutter-build-args=split-debug-info=./symbols
+      - name: Upload msix
+        if: steps.package-msix.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wlist_ui-windows-x86_64-msix
+          path: D:/wlist_ui/dist/*/wlist_ui-*-windows.msix
+
+      - name: Package zip
+        id: package-zip
+        continue-on-error: true
+        working-directory: D:/wlist_ui
+        run: |
+          fastforge package --skip-clean --platform windows --targets zip --flutter-build-args=split-debug-info=./symbols
+      - name: Upload zip
+        if: steps.package-zip.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wlist_ui-windows-x86_64-zip
+          path: D:/wlist_ui/dist/*/wlist_ui-*-windows.zip
+
+
+  build-macos:
+    name: Build macos
+    runs-on: macos-latest
+    steps:
+      - name: Check rust version
+        run: rustup --version
+
+      - name: Setup flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Check flutter version
+        run: flutter --version
+
+      - name: Checkout ui
+        uses: actions/checkout@v4
+        with:
+          repository: wlist-org/wlist_ui
+          token: '${{ secrets.GH_TOKEN }}'
+          path: ./wlist_ui
+          submodules: recursive
+
+      - name: Checkout native
+        uses: actions/checkout@v4
+        with:
+          repository: wlist-org/wlist_native
+          token: '${{ secrets.GH_TOKEN }}'
+          path: ./wlist_native
+          submodules: recursive
+
+      - name: Write crt and key
+        run: |
+          echo ${{ secrets.SENTRY_DSN }} | base64 --decode > ./wlist_native/wlist_common/src/dsn.txt
+          echo ${{ secrets.SENTRY_DSN_FLUTTER }} | base64 --decode > ./wlist_ui/lib/dsn.dart
+          echo ${{ secrets.SENTRY_PROPERTIES }} | base64 --decode > ./wlist_ui/sentry.properties
+          mkdir ./wlist_native/wlist_web/certs
+          echo ${{ secrets.WEB_CLIENT_CRT }} | base64 --decode > ./wlist_native/wlist_web/certs/client.crt
+          echo ${{ secrets.WEB_CLIENT_KEY }} | base64 --decode > ./wlist_native/wlist_web/certs/client.key
+
+      - name: Cache rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ./wlist_ui/rust/target
+            ./wlist_ui/build/macos/Build/Intermediates.noindex/Pods.build/Release/rust_lib_wlist_ui.build
+          key: wlist-release-rust-macos-v0-${{ github.run_id }}
+          restore-keys: |
+            wlist-release-rust-macos-v0-
+
+      - name: Install dependencies
+        run: |
+          if ! command -v flutter_rust_bridge_codegen &> /dev/null; then
+            echo Newly install flutter_rust_bridge_codegen@${FRB_VERSION} and cargo-expand.
+            cargo install flutter_rust_bridge_codegen@${FRB_VERSION} --locked
+            cargo install cargo-expand --locked --force
+          else
+            INSTALLED_VERSION=$(flutter_rust_bridge_codegen --version | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+            if [ "$INSTALLED_VERSION" != "$FRB_VERSION" ]; then
+              echo Update install flutter_rust_bridge_codegen@${FRB_VERSION} and cargo-expand.
+              cargo install flutter_rust_bridge_codegen@${FRB_VERSION} --locked --force
+              cargo install cargo-expand --locked --force
+            fi
+          fi
+          flutter pub global activate intl_utils
+          flutter pub global activate fastforge
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Generate code
+        working-directory: ./wlist_ui
+        run: |
+          flutter_rust_bridge_codegen integrate --no-enable-integration-test
+          git reset --hard
+          flutter pub get
+          flutter_rust_bridge_codegen generate
+          flutter pub global run intl_utils:generate
+          flutter create --platforms=macos .
+          dart run flutter_launcher_icons
+
+      - name: Apply patches
+        working-directory: ./wlist_ui
+        run: |
+          git apply ./diffs/*.patch
+          git apply ./diffs/macos/*
+
+      - name: Build release
+        working-directory: ./wlist_ui
+        run: |
+          rustup run stable cargo build --manifest-path ./rust/Cargo.toml -p rust_lib_wlist_ui --release --target aarch64-apple-darwin --target-dir ./build/macos/Build/Intermediates.noindex/Pods.build/Release/rust_lib_wlist_ui.build
+          rustup run stable cargo build --manifest-path ./rust/Cargo.toml -p rust_lib_wlist_ui --release --target x86_64-apple-darwin --target-dir ./build/macos/Build/Intermediates.noindex/Pods.build/Release/rust_lib_wlist_ui.build
+          flutter build macos --release --split-debug-info=./symbols
+
+      - name: Upload symbols
+        continue-on-error: true
+        working-directory: ./wlist_ui
+        run: dart run sentry_dart_plugin --ignore-missing --sentry-define=symbols_path=./symbols
+
+      - name: Package dmg
+        id: package-dmg
+        continue-on-error: true
+        working-directory: ./wlist_ui
+        run: |
+          npm install -g appdmg
+          fastforge package --skip-clean --platform macos --targets dmg --flutter-build-args=split-debug-info=./symbols
+      - name: Upload dmg
+        if: steps.package-dmg.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wlist_ui-macos-dmg
+          path: ./wlist_ui/dist/*/wlist_ui-*-macos.dmg
+
+      - name: Package pkg
+        id: package-pkg
+        continue-on-error: true
+        working-directory: ./wlist_ui
+        run: |
+          fastforge package --skip-clean --platform macos --targets pkg --flutter-build-args=split-debug-info=./symbols
+      - name: Upload pkg
+        if: steps.package-pkg.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wlist_ui-macos-pkg
+          path: ./wlist_ui/dist/*/wlist_ui-*-macos.pkg
+
+      - name: Package zip
+        id: package-zip
+        continue-on-error: true
+        working-directory: ./wlist_ui
+        run: |
+          fastforge package --skip-clean --platform macos --targets zip --flutter-build-args=split-debug-info=./symbols
+      - name: Upload zip
+        if: steps.package-zip.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wlist_ui-macos-zip
+          path: ./wlist_ui/dist/*/wlist_ui-*-macos.zip
+
+
+  build-linux-x86_64:
+    name: Build linux-x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check rust version
+        run: rustup --version
+
+      - name: Install packages
+        run: |
+          sudo apt-get update -y && sudo apt-get upgrade -y
+          sudo apt-get install -y curl git unzip xz-utils zip libglu1-mesa
+          sudo apt-get install -y clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+
+      - name: Setup flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Check flutter version
+        run: flutter --version
+
+      - name: Checkout ui
+        uses: actions/checkout@v4
+        with:
+          repository: wlist-org/wlist_ui
+          token: '${{ secrets.GH_TOKEN }}'
+          path: ./wlist_ui
+          submodules: recursive
+
+      - name: Checkout native
+        uses: actions/checkout@v4
+        with:
+          repository: wlist-org/wlist_native
+          token: '${{ secrets.GH_TOKEN }}'
+          path: ./wlist_native
+          submodules: recursive
+
+      - name: Write crt and key
+        run: |
+          echo ${{ secrets.SENTRY_DSN }} | base64 --decode > ./wlist_native/wlist_common/src/dsn.txt
+          echo ${{ secrets.SENTRY_DSN_FLUTTER }} | base64 --decode > ./wlist_ui/lib/dsn.dart
+          echo ${{ secrets.SENTRY_PROPERTIES }} | base64 --decode > ./wlist_ui/sentry.properties
+          mkdir ./wlist_native/wlist_web/certs
+          echo ${{ secrets.WEB_CLIENT_CRT }} | base64 --decode > ./wlist_native/wlist_web/certs/client.crt
+          echo ${{ secrets.WEB_CLIENT_KEY }} | base64 --decode > ./wlist_native/wlist_web/certs/client.key
+
+      - name: Cache rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ./wlist_ui/rust/target
+            ./wlist_ui/build/linux/x64/release/plugins/rust_lib_wlist_ui/cargokit_build
+          key: wlist-release-rust-linux-x86_64-v0-${{ github.run_id }}
+          restore-keys: |
+            wlist-release-rust-linux-x86_64-v0-
+
+      - name: Install dependencies
+        run: |
+          if ! command -v flutter_rust_bridge_codegen &> /dev/null; then
+            echo Newly install flutter_rust_bridge_codegen@${FRB_VERSION} and cargo-expand.
+            cargo install flutter_rust_bridge_codegen@${FRB_VERSION} --locked
+            cargo install cargo-expand --locked --force
+          else
+            INSTALLED_VERSION=$(flutter_rust_bridge_codegen --version | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+            if [ "$INSTALLED_VERSION" != "$FRB_VERSION" ]; then
+              echo Update install flutter_rust_bridge_codegen@${FRB_VERSION} and cargo-expand.
+              cargo install flutter_rust_bridge_codegen@${FRB_VERSION} --locked --force
+              cargo install cargo-expand --locked --force
+            fi
+          fi
+          flutter pub global activate intl_utils
+          flutter pub global activate fastforge
+          rustup target add x86_64-unknown-linux-gnu
+
+      - name: Generate code
+        working-directory: ./wlist_ui
+        run: |
+          flutter_rust_bridge_codegen integrate --no-enable-integration-test
+          git reset --hard
+          flutter pub get
+          flutter_rust_bridge_codegen generate
+          flutter pub global run intl_utils:generate
+          flutter create --platforms=linux .
+          dart run flutter_launcher_icons
+
+      - name: Relink native
+        working-directory: ./wlist_ui
+        run: |
+          git apply ./diffs/relink.patch
+
+      - name: Build release
+        working-directory: ./wlist_ui
+        run: |
+          rustup run stable cargo build --manifest-path ./rust/Cargo.toml -p rust_lib_wlist_ui --release --target x86_64-unknown-linux-gnu --target-dir ./build/linux/x64/release/plugins/rust_lib_wlist_ui/cargokit_build
+          flutter build linux --release --target-platform linux-x64 --split-debug-info=./symbols
+
+      - name: Upload symbols
+        continue-on-error: true
+        working-directory: ./wlist_ui
+        run: dart run sentry_dart_plugin --ignore-missing --sentry-define=symbols_path=./symbols
+
+      - name: Package deb
+        id: package-deb
+        continue-on-error: true
+        working-directory: ./wlist_ui
+        run: |
+          fastforge package --skip-clean --platform linux --targets deb --build-target-platform=linux-x64 --flutter-build-args=split-debug-info=./symbols
+      - name: Upload deb
+        if: steps.package-deb.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wlist_ui-linux-x86_64-deb
+          path: ./wlist_ui/dist/*/wlist_ui-*-linux.deb
+
+      - name: Package rpm
+        id: package-rpm
+        continue-on-error: true
+        working-directory: ./wlist_ui
+        run: |
+          sudo apt-get install -y rpm patchelf
+          fastforge package --skip-clean --platform linux --targets rpm --build-target-platform=linux-x64 --flutter-build-args=split-debug-info=./symbols
+      - name: Upload rpm
+        if: steps.package-rpm.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wlist_ui-linux-x86_64-rpm
+          path: ./wlist_ui/dist/*/wlist_ui-*-linux.rpm
+
+      - name: Package zip
+        id: package-zip
+        continue-on-error: true
+        working-directory: ./wlist_ui
+        run: |
+          fastforge package --skip-clean --platform linux --targets zip --build-target-platform=linux-x64 --flutter-build-args=split-debug-info=./symbols
+      - name: Upload zip
+        if: steps.package-zip.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wlist_ui-linux-x86_64-zip
+          path: ./wlist_ui/dist/*/wlist_ui-*-linux.zip
