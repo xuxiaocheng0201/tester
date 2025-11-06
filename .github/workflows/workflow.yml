@@ -15,9 +15,6 @@ jobs:
     name: Build arm64
     runs-on: windows-11-arm
     steps:
-      - name: Check rust version
-        run: rustup --version
-
       - name: Checkout
         uses: actions/checkout@v5
 
