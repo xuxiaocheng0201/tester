@@ -13,7 +13,7 @@ env:
 jobs:
   build:
     name: Build arm64
-    runs-on: ubuntu-24.04-arm
+    runs-on: windows-11-arm
     steps:
       - name: Check rust version
         run: rustup --version
@@ -21,11 +21,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt-get install -y gdb
-
       - name: Build
-        run: |
-          cargo build
+        run: cargo build
+
+      - name: gdb
+        run: gdb --version
