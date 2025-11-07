@@ -27,7 +27,7 @@ jobs:
         shell: bash
         run: |
           file ./target/release/tester.exe
-          gdb --batch -ex="run" -ex="quit" ./target/release/tester
+          gdb --verbose --batch -ex="run" -ex="quit" ./target/release/tester
 
   build-amd:
     name: Build amd64
@@ -45,4 +45,4 @@ jobs:
         shell: bash
         run: |
           file ./target/release/tester.exe
-          gdb --batch -ex="run" -ex="quit" ./target/release/tester
+          gdb --verbose --batch -ex="run" -ex="quit" ./target/release/tester
