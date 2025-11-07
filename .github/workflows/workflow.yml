@@ -22,7 +22,7 @@ jobs:
         run: cargo build --release
 
       - name: gdb
-        run: gdb --batch -ex="run" -ex="quit" ./tester/target/release/tester
+        run: gdb --batch -ex="run" -ex="quit" ./target/release/tester
 
   build-amd:
     name: Build amd64
@@ -35,6 +35,4 @@ jobs:
         run: cargo build --release
 
       - name: gdb
-        run: |
-          mv ./tester/target/release/tester.exe ./tester/target/release/tester
-          gdb --batch -ex="run" -ex="quit" ./tester/target/release/tester
+        run: gdb --batch -ex="run" -ex="quit" ./target/release/tester
