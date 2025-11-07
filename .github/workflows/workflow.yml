@@ -11,7 +11,7 @@ env:
   RUST_BACKTRACE: full
 
 jobs:
-  build:
+  build-arm:
     name: Build arm64
     runs-on: windows-11-arm
     steps:
@@ -22,4 +22,17 @@ jobs:
         run: cargo build
 
       - name: gdb
-        run: gdb --version
+        run: gdb --batch -ex="run" -ex="quit" ./tester/target/debug/tester
+
+  build-amd:
+    name: Build amd64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build
+        run: cargo build
+
+      - name: gdb
+        run: gdb --batch -ex="run" -ex="quit" ./tester/target/debug/tester
