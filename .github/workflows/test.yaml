@@ -19,5 +19,7 @@ jobs:
       - name: Set Openssl
         run: |
           echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $env:GITHUB_ENV
+      - name: Checkout
+        uses: actions/checkout@v6
       - name: Run test
         run: cargo test
